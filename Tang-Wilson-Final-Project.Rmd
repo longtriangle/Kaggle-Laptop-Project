@@ -1,0 +1,389 @@
+---
+title: 'STAT3215: Final Project'
+author: "Wilson Tang"
+date: "04/06/2025"
+output:
+  pdf_document: null
+  highlight: default
+  keep_tex: no
+  fig_caption: yes
+  latex_engine: pdflatex
+  html_document:
+    df_print: paged
+affiliation: Department of Statistics, UConn
+fontsize: 11pt
+geometry: margin=1in
+---
+
+## Introduction:
+
+In today's digital age, laptops play an essential role in our daily lives — from work and academics to entertainment. Their blend of portability and performance makes them almost indispensable. However, laptops can be quite expensive, leading many consumers to question whether they're getting good value for their money. Are certain upgrades really worth the added cost?
+To explore this question, I used the "Laptop Specs and Latest Price" dataset from Kaggle, which includes nearly 900 entries with details on laptop specifications including processor type, RAM, storage options, graphics capabilities, operating systems, and corresponding prices. The dataset provides both older and newer prices, along with ratings and review counts.
+The primary research question this analysis addresses is: **Which technical specifications are the most significant determinants of laptop prices (data), and how much value does each component add (domain)?** By developing a robust regression model that help comparing the relative price of specifications, consumers can better assess whether specific upgrades justify their cost and make more informed purchasing decisions.
+
+## Methodology:
+
+### 1. Regression Methods Applied
+
+This analysis uses multiple linear regression to model the relationship between laptop specifications and prices. The following statistical methods were implemented:
+
+- **Initial Variable Selection**: I began with a subject-matter informed approach to select potentially relevant predictors from the dataset, removing variables that were redundant, had insufficient data, or clearly had collinearity with other variables.
+
+- **Categorical Variable Management**: Many laptop specifications are categorical in nature, so I carefully factorized these variables and consolidated levels where appropriate to reduce complexity while maintaining meaningful distinctions.
+
+- **Ordinary Least Sqaures**: OLS finds a line that minimizes the sum of squared residuals, essentially finding the best line to fit the relationship between predictors and response. But requires the following assumptions:
+  - Linearity, for categorical variables, this well be testing if the interaction terms are significant.
+  - Independence, each observation needs to be independent of another. (For this data set, it is given, since each laptop is independent of another)
+  - Homoscedasticity of residuals, constant variance of residuals, which can be tested visually using residual plots, or Bartlett's test, or Breusch-Pagan test.
+  - Normality of residuals and zero conditional mean, which can be tested visually with larger samples.
+  - No multicolinearity, which can be tested using Variance inflation factors.
+
+- **Stepwise Selection**: I implemented both forward selection and backward elimination procedures using Akaike Information Criterion (AIC) to identify the most informative predictors while maintaining model parsimony.
+
+- **Box-Cox Transformation**: To address non-normality in the residuals, I applied a one parameter Box-Cox transformation to the response variable (latest_price_usd). This one-parameter transformation helps stabilize variance and improves the normality of residuals. Non-constant variance and non-linearity could be remedied as well.
+
+- **Bootstrap Confidence Intervals**: Due to remaining concerns about OLS assumptions, bootstrap (case resampling) is applied as a remedy to stabilize and make inference about the research question.
+
+### 2. Data Preparation and Variable Adjustments
+
+First I loaded the dataset and necessary packages.
+
+```{r, include = FALSE}
+library(car)
+library(dplyr)
+library(psych)
+library(ggplot2)
+laptop_data_full <- read.csv("C:/Users/wilso/Downloads/Cleaned_Laptop_data.csv")
+```
+
+#### Initial Variable Selection
+
+I carefully selected variables based on their relevance to laptop performance and price. Variables excluded with rationale include:
+- Brand and model: Though predictive, they correlate with technical specs
+- Processor_brand: Redundant with processor_name
+- Processor_gnrtn: > 200 data points missing, or about 20% of the data.
+- Weight, display_size, touchscreen, msoffice: Not directly performance-related
+- Warranty, discount, star ratings, ratings, reviews: Outside project scope
+- Old_price: Latest_price is likely a better response
+
+```{r, echo = FALSE}
+laptop_data <- laptop_data_full[, !colnames(laptop_data_full) %in% c("brand", "model", "processor_brand", 
+                                                           "processor_gnrtn", "weight", "display_size", 
+                                                           "warranty", "Touchscreen", "msoffice", 
+                                                           "old_price", "discount", "star_rating", "ratings",
+                                                           "reviews")]
+```
+
+#### Variable Transformations and Groupings
+
+I applied domain knowledge to create meaningful groups for categorical variable:
+
+```{r, echo = FALSE}
+# Price conversion from Indian Rupees to USD
+laptop_data$latest_price_usd <- (laptop_data$latest_price) * 0.012
+
+# Processor grouping
+laptop_data$processor_tier <- with(laptop_data, case_when(
+  processor_name %in% c("Core i9", "Ryzen 9", "M1", "Core i7", "Ryzen 7", "GeForce RTX", "GEFORCE RTX") ~ "High",
+  processor_name %in% c("Core i5", "Ryzen 5", "GeForce GTX") ~ "Mid",
+  processor_name %in% c("Core i3", "Ryzen 3", "Celeron Dual", "Pentium Quad", "Pentium Silver", "A6-9225 Processor", 
+                        "APU Dual", "Athlon Dual", "Snapdragon 7c", "MediaTek Kompanio", "Core m3", "Dual Core", 
+                        "Hexa Core") ~ "Low",
+))
+laptop_data$processor_tier <- factor(laptop_data$processor_tier,
+                                     levels = c("Low", "Mid", "High"))
+# Storage grouping
+laptop_data$ssd_group <- with(laptop_data, case_when(
+  ssd %in% c("0 GB", "32 GB", "128 GB") ~ "Low ssd",
+  ssd %in% c("256 GB", "512 GB") ~ "Medium ssd",
+  ssd %in% c("1024 GB", "2048 GB", "3072 GB") ~ "High ssd" 
+))
+laptop_data$ssd_group <- factor(laptop_data$ssd_group,
+                                levels = c("Low ssd", "Medium ssd", "High ssd"))
+
+laptop_data$hdd_group <- with(laptop_data, case_when(
+  hdd == "0 GB" ~ "No hdd",
+  hdd %in% c("512 GB", "1024 GB", "2048 GB") ~ "Has hdd"
+))
+laptop_data$hdd_group <- factor(laptop_data$hdd_group,
+                                levels = c("No hdd", "Has hdd"))
+
+# RAM grouping
+laptop_data$ram_gb_group <- with(laptop_data, case_when(
+  ram_gb == "4 GB GB" ~ "4 GB",
+  ram_gb == "8 GB GB" ~ "8 GB",
+  ram_gb %in% c("16 GB GB", "32 GB GB") ~ "16+ GB"
+))
+laptop_data$ram_gb_group <- factor(laptop_data$ram_gb_group,
+                                   levels = c("4 GB", "8 GB", "16+ GB"))
+
+laptop_data$ram_type_tier <- with(laptop_data, case_when(
+  ram_type %in% c("DDR3", "LPDDR3", "LPDDR4", "DDR4") ~ "General-Purpose",
+  ram_type %in% c("LPDDR4X", "DDR5") ~ "High-Performance"
+))
+laptop_data$ram_type_tier <- factor(laptop_data$ram_type_tier,
+                                    levels = c("General-Purpose", "High-Performance"))
+
+# Graphic card group
+laptop_data$graphic_card_tier <- with(laptop_data, case_when(
+  graphic_card_gb == 0 ~ "Low",
+  graphic_card_gb %in% c(2, 4) ~ "Mid",
+  graphic_card_gb %in% c(6, 8) ~ "High"
+))
+laptop_data$graphic_card_tier <- factor(laptop_data$graphic_card_tier,
+                                           levels = c("Low", "Mid", "High"))
+
+# Os grouping
+laptop_data$os_tier <- with(laptop_data, case_when(
+  os == "Windows" ~ "High Performance",
+  os == "Mac" ~ "High Performance",
+  os == "DOS" ~ "Low Performance"
+))
+laptop_data$os_tier <- factor(laptop_data$os_tier, levels = c("Low Performance", "High Performance"))
+
+laptop_data$os_bit <- factor(laptop_data$os_bit, levels = c("32-bit", "64-bit"))
+```
+
+For processor types, I classified them into three tiers (Low, Mid, High) based on their performance capabilities. Similarly, I grouped SSD storage into Low (0-128GB), Medium (256-512GB), and High (1TB+) categories. HDD storage was instead grouped into no (0 GB) or has (512-2048 GB). For RAM, I created capacity groups (4GB, 8GB, 16+GB) and type categories (General-Purpose vs. High-Performance). Graphics capabilities were classified by dedicated memory into Low (0GB), Mid-Level (2-4GB), and High (6-8GB) tiers. Moreover, operating system was classified to two tiers (Low and High) based on performance. While the bit levels for operating systems was already well organized. Finally, all categorical variables were converted into dummy variables to be used in regression analysis.
+
+#### Handling Missing Data and Outliers
+
+```{r, echo = FALSE}
+laptop_data2 <- na.omit(laptop_data)
+
+laptop_form1 <- latest_price_usd ~ processor_tier + ram_gb_group + ram_type_tier + ssd_group + hdd_group + graphic_card_tier + os_tier + os_bit
+lm_laptop1 <- lm(laptop_form1, data = laptop_data2)
+
+ti_laptop1 <- rstudent(lm_laptop1)
+outliers <- which(abs(ti_laptop1) > 2)
+laptop_data3 <- laptop_data2[-outliers, ]
+```
+
+The dataset has some missing data and using studentized residuals I was able to identify outlier points. The missing data comes from the fact that for 8 of the processors, they couldn't really be categorized. The choice identifying any data point with an absolute studentized residual of greater than 2 as an outlier is because generally for data sets that are not small, that is a good standard. Overall, there was 8 data points with missing data and 48 with a stundentized residual that is greater than 2. With 896 data points, removing the 56 data points is likely the best choice for simplicity and won't come at a cost of losing the relationship between predictors and response.
+
+### 3. Model Selection and Validation
+
+#### Variable Selection Process
+
+The reason why a method like LASSO isn't as helpful here is because, LASSO will break down each group, however even if only one of the groups is significant, for the scope of this project, the whole whole would still need to be included. Bayesian Information Criterion is not useful here because the model has already been simplified a lot before this. Thus, I implemented both forward selection and backward elimination with Aiken Information Criterion to identify the optimal set of predictors that will balance predictive power and complexity:
+
+```{r, echo = FALSE, results='hide'}
+# Forward Selection with AIC
+laptop_fs_aic <- step(lm(latest_price_usd ~ 1,data = laptop_data3), scope = list(upper = laptop_form1), direction = "forward", k = 2,trace = 0)
+formula(laptop_fs_aic)
+
+# Backward Elimination with AIC
+laptop_be_aic <- step(lm(laptop_form1, data = laptop_data3), direction = "backward", k = 2, trace = 0)
+formula(laptop_be_aic)
+```
+
+```{r, echo = FALSE}
+lm_laptop2 <- lm(latest_price_usd ~ processor_tier + graphic_card_tier + ssd_group + 
+    os_tier + ram_type_tier + ram_gb_group + hdd_group, data = laptop_data3)
+```
+
+Both Forward Selection and Backward elimination yielded the same model. The consistency suggests that the predictors (processor_tier, graphic_card_tier, ssd_group, os_tier, ram_type_tier, ram_gb_group, hdd_group) are likely very important. Os_bit was likely excluded due to the fact that they did not provide enough explanatory power to justify their inclusion based on the AIC. While automatic selection procedures can introduce overconfidence, our large sample size, the agreement across two selection methods, and the fact that both included and excluded predictors align with domain knowledge all mitigate those concerns. Therefore, I am comfortable moving forward with this model.
+
+#### Model Evaluation Metrics
+
+I will use the following function to evaluate the model:
+
+```{r, echo = FALSE}
+model_eval <- function(m){
+press <- sum( ( residuals(m) / (1 - hatvalues(m)) )^2 )
+aic <- AIC(m)
+bic <- BIC(m)
+summary <- summary(m)
+adj_r2 <- summary$adj.r.squared
+out <- c(press, aic, bic, adj_r2)
+names(out) <- c("PRESS", "AIC", "BIC", "adj_r2")
+return(out)
+}
+```
+
+PRESS indicates the predictive power of the model, assessing how well it performs on unseen data. AIC reflects the trade-off between predictive accuracy and model complexity, where a lower value suggests a better balance. BIC similarly evaluates model fit but places a stronger penalty on complexity, prioritizing simpler models. In all cases, lower scores are better. Moreover, adjusted R-squared indicates how much of the variability in the response variable can be explained by the predictors, while adjusting for the number of predictors in the model. The closer this value is to 1, the better the model explains the data.
+
+Evaluating the model:
+```{r, echo = FALSE, results='hide'}
+eval_laptop_aic <- model_eval(lm_laptop2)
+rbind(eval_laptop_aic)
+```
+
+The elevated values of PRESS (34664348), AIC (11299.4), and BIC (11360.94) suggest that the model exhibits predictive power, bad balance of fit with complexity, and an unnecessarily high degree of complexity. This suggests the need for remedies. However, the adjusted R squared value suggests that about 76% of the variation in price can be explained by the predictors in the model. Typically, R squared > 0.7 is good in predictive modeling.
+
+### 4. Regression Diagnostics and Remedies
+
+Type II anova tests for the significance of each term while accounting for terms of the same or lower order. Thus if an interaction term is statistically significant, there is evidence for non-linearity.
+
+```{r, echo = FALSE, results='hide', message=FALSE, warning=FALSE}
+# Linearity Assessment
+lm_laptop3 <- lm(latest_price_usd ~ (processor_tier + graphic_card_tier + ssd_group + 
+    os_tier + ram_type_tier + ram_gb_group + hdd_group) ^ 2, data = laptop_data3)
+laptop_sig_int <- Anova(lm_laptop3, type = "II")
+laptop_sig_int[laptop_sig_int$`Pr(>F)` < 0.05, ]
+```
+
+Variance Inflation Factor measures the how inflated the variance of a predictor is due to multicolinearity. Generally, values of under 5 is acceptable, between 5 and 10 is somewhat concerning and greater than 10 is very serious. Moreover, for cases of many categorical variables with with than 2 levels, we use GVIF instead.
+
+```{r, echo = FALSE, results='hide'}
+# Multicollinearity Check
+vif(lm_laptop2)
+```
+
+In this case, given the relatively large sample size, formal normality tests such as the Shapiro-Wilk test can be overly sensitive to minor deviations from normality. The quantile-quantile (Q-Q) plot and histogram allows us to visually inspect normality. For the QQ-plot, If the points fall approximately along the reference line, then normality of residuals is acceptable. For the histogram, if the distribution of residuals resembles a bell-shaped curve and follows the imposed normal curve well, then normality of residuals is acceptable.
+
+```{r, include = FALSE}
+# Normality Assessment
+ti_laptop <- rstudent(lm_laptop2)
+par(mfrow=c(1,2))
+qqnorm(ti_laptop); qqline(ti_laptop)
+m<-mean(ti_laptop); std<-sd(ti_laptop)
+hist(ti_laptop, density=20, breaks=20, prob=TRUE, xlab="Studentized residuals",
+main="Histogram with Normal overlay")
+curve(dnorm(x, mean=m, sd=std), col="darkblue", lwd=2, add=TRUE, yaxt="n")
+```
+
+The Breusch-Pagan test offers a way to test the entire model for homoscedasticity. However, when a model is not linear, this test may provide a false positive. A statistically signifcant result (p < 0.05) means that homoscedasticity is not reasonable.
+
+```{r, echo = FALSE, results='hide'}
+# Homoscedasticity Check
+ncvTest(lm_laptop2)
+```
+
+Overall, because of the fact that several interaction terms are significant, we don't have enough evidence to assume linearity. Though there are no issues of multicolinearity because all GVIF values are less than 5. Normality is definitely not satisfied, because points do not follow the fitted line on the QQ-plot and histogram clearly is skewed. Moreover, even with non-linearity, the ncvTest was still statistically significant, meaning equal-variance is not reasonable. Because of so many violations of the conditions of the OLS, we proceed with remedies.
+
+#### Remedial Measures: one parameter Box-Cox Transformation
+
+To address the violations of normality, constant variance and linearity assumptions, I applied a one parameter Box-Cox transformation because all response values are positive and in the hundreds or thousands. The reason is because all predictors are categorical, thus interacting with the continous response is a good start.
+
+```{r, echo = FALSE, results='hide'}
+laptop_trans <- powerTransform(lm_laptop2)
+laptop_lambda <- laptop_trans$roundlam
+laptop_lambda
+
+laptop_data3$laptop_price <- bcPower(laptop_data3$latest_price_usd, lambda = laptop_lambda)
+
+lm_laptop4 <- lm(laptop_price ~ processor_tier + graphic_card_tier + ssd_group + 
+    os_tier + ram_type_tier + ram_gb_group + hdd_group, data = laptop_data3)
+lm_laptop5 <- lm(laptop_price ~ (processor_tier + graphic_card_tier + ssd_group + 
+    os_tier + ram_type_tier + ram_gb_group + hdd_group)^2, data = laptop_data3)
+```
+
+The rounded is 0, and a rounded lambda value of 0 means that a good transformation for the response is to apply a log transformation.
+
+#### Final Model Assessment
+
+```{r, echo = FALSE, results='hide'}
+eval_laptop_final <- model_eval(lm_laptop4)
+rbind(eval_laptop_final)
+```
+
+```{r, echo = FALSE, results='hide', message=FALSE, warning=FALSE}
+Anova(lm_laptop5, type = "II")
+```
+
+```{r, include = FALSE}
+# Re-check normality
+ti_laptop2 <- rstudent(lm_laptop4)
+par(mfrow=c(1,2))
+qqnorm(ti_laptop2); qqline(ti_laptop2)
+m<-mean(ti_laptop2); std<-sd(ti_laptop2)
+hist(ti_laptop2, density=20, breaks=20, prob=TRUE, xlab="Studentized residuals",
+main="Histogram with Normal overlay")
+curve(dnorm(x, mean=m, sd=std), col="darkblue", lwd=2, add=TRUE, yaxt="n")
+```
+
+```{r, echo = FALSE, results='hide'}
+# Re-check multicollinearity
+vif(lm_laptop4)
+```
+
+
+```{r, echo = FALSE, results='hide'}
+# Re-check homoscedasticity
+ncvTest(lm_laptop4)
+```
+
+Overall, some interaction terms are still significant and thus we fail to satisfy linearity. Moreover, the interaction terms cannot be included due to the fact that they cause mutlicolinearity issues. Normality is satisfied because the QQ-plot follows the line very well and the histogram follows the normal distribution outline well and is clearly centered around 0. All GVIF values are below 5 which means there is very little to no cocern to multicolinearity. Although the ncvTest gives evidence that equal-variance is satisfied. Due to the fact that the ncvTest doesn't perform as well without linearity, we will likely proceed with other remedial measures to be certain this criteria is met. The model exhibits a relatively low PRESS value (39.52388), indicating strong predictive performance on unseen data. Additionally, both the AIC (-185.5492) and BIC (-124.0149) values are favorable, suggesting an appropriate balance between model fit and complexity. Furthermore, the model accounts for a substantial proportion of the variation in the log-transformed price (USD), as evidenced by a high adjusted R-squared (0.7789242). However, do note that PRESS and adjusted R-squared is not as important since the goal is to compare the relative effects of coefficients.
+
+### 5. Statistical Testing
+
+To address remaining concerns about non-constant variance and non-linearity, I implemented bootstrap with case resampling. This method does not rely on key OLS assumptions like homoscedasticity or normality. Instead, it estimates the variability of model coefficients and statistics directly from the data, making inference more robust under assumption violations.
+
+```{r, echo = FALSE, results='hide', message=FALSE, warning=FALSE}
+set.seed(3215)
+laptop.boot <- Boot(lm_laptop4, f = coef, R = 1000, method = "case")
+Confint(laptop.boot)
+```
+
+```{r, echo = FALSE}
+ci_df <- data.frame(
+  term = names(coef(lm_laptop4)),
+  lower = apply(as.data.frame(laptop.boot$t), 2, function(x) quantile(x, 0.025)),
+  upper = apply(as.data.frame(laptop.boot$t), 2, function(x) quantile(x, 0.975))
+)
+
+ci_df <- subset(ci_df, term != "(Intercept)")
+
+ggplot(ci_df, aes(x = term)) +
+  geom_segment(aes(y = lower, yend = upper), linewidth = 1) +
+  geom_point(aes(y = lower, color = "2.5%"), size = 2) +
+  geom_point(aes(y = upper, color = "97.5%"), size = 2) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  coord_flip() +
+  labs(x = "", y = "Bootstrap Coefficient Estimate", title = "Bootstrap 2.5% and 97.5% Quantiles") +
+  scale_color_manual(values = c("blue", "green")) +
+  theme_minimal()
+```
+
+Since none of the 95% confidence intervals include 0, we have strong evidence to suggest that all predictors significantly affect the log of laptop price (USD). The coefficient for hdd_groupHas hdd is negative, which can be explained by the fact that laptops without an HDD tend to have more SSD storage, which is generally more expensive per GB. As for os_tierHigh Performance, the negative coefficient may reflect the fact that, despite the high-performance OS, other factors—such as the hardware components—could be influencing the price. For example, laptops with high-performance operating systems might be paired with more budget-friendly hardware, which brings the overall price down. It is important to exercise caution when interpreting the effect of os_tierHigh Performance, as other unaccounted-for factors may be influencing this relationship. Careful consideration of the context and potential confounders is necessary when making inferences based on this term.
+
+### 6. Answering the research question
+
+Due to violations of the linearity assumption, directly interpreting the coefficients may not provide a reliable picture of the true effect of each predictor. However, we can still compare the relative effects of each predictor group on the log-transformed laptop price (USD). The log transformation maintains a consistent percentage change in price, meaning we don’t need to worry about reversing the transformation to make comparisons. By combining the rankings of each predictor's contribution to the log of laptop price (USD) with domain knowledge about what upgrading from one tier to another entails, we can identify which upgrades offer the most value. This approach allows us to leverage the data’s insights while acknowledging the limitations due to assumption violations, helping us make more informed decisions about which upgrades are most worth the price.
+
+1. PProcessor Tier (Low, Mid, High):
+
+  - Low-tier: Budget-friendly but struggles with multitasking and basic programming. Not ideal for demanding tasks.
+
+  - Mid-tier: Balanced performance for most users, handling moderate tasks efficiently. Best price-to-performance ratio.
+
+  - High-tier: Ideal for heavy tasks like gaming or video editing but overpriced for general use unless specific needs demand it.
+
+2. Graphic card tier (low, mid, high):
+
+  - Low-tier: Sufficient for everyday tasks like web browsing and light media consumption. Struggles with gaming or intensive graphics tasks. Best price-performance ratio.
+
+  - Mid-tier: Handles moderate gaming, video editing, and other graphic-intensive tasks well. Good balance for most users. 
+
+  - High-tier: Best for gaming, 3D rendering, and professional video editing. Expensive, and only worth it for users with specific high-performance needs.
+
+3. SSD group (low, mid, high):
+
+  - Low-tier SSD: Slower but still faster than HDDs, best for basic tasks and budget-conscious users.
+  
+  - Mid-tier SSD: Solid performance at a reasonable price, great for most users. Best price-performance ratio.
+  
+  - High-tier SSD: Fastest performance, ideal for intensive tasks and multitasking. Worth the price for power users.
+
+4. Ram type tier (low-performance, high-performance):
+
+  - Low-performance RAM offers the best price-to-performance ratio for average users, providing sufficient speed for general tasks at a lower cost.
+
+  - High-performance RAM is less cost-effective for average users, as the benefits are more noticeable for power users with resource-intensive tasks. It’s better for users who need maximum multitasking and speed but may not be worth the price for typical use.
+
+5. Ram GB group (4 GB, 8 GB. 16+ GB): 
+
+  - 4 GB RAM is great for handling everyday tasks at a very affordable cost.
+
+  - 8 GB RAM is the sweet spot for most users, balancing price and performance for multitasking and moderate workloads.
+
+  - 16+ GB RAM is overkill for most users, better suited for power users or those running heavy applications, however this group is not much more expensive than 8 GB RAM according to the results. Best price-performance ratio.
+  
+6. HDD is much more-cost effective in terms of storing data, but lacks the performance of SSD, so for most users it is good to stick to SSD
+
+7. In terms of OS, most people should use high performance, this one is non-negotiable, as using lower performance OS is not a great experience.
+
+## Conclusion
+
+This analysis highlights that technical specifications significantly impact laptop prices. By applying bootstrap to a power-transformed multiple regression model, refined with the AIC criterion, we confirmed the statistical significance of our final predictors (processor tier, graphics tier, SSD group, OS tier, RAM type, RAM capacity, and HDD group) on price. For consumers, mid-range components offer the best cost-performance balance, while high-end components are only worthwhile for specialized tasks with the exception or RAM GB. Which did not increase in price by much with the upgrade of mid tier to high tier. HDDs provide more storage but lack the performance to justify the saving. Operating systems are really essential for usability, users really should stick to high performance ones. These insights aid in making informed purchasing decisions, focusing on specs that provide the most value. Future research should consider factors like build materials, branding, battery life, and other metrics to further enhance the model.
